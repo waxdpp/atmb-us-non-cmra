@@ -1,31 +1,18 @@
 use color_eyre::eyre::Result;
-use serde::{Deserialize, Serialize};
 use tracing::info;
 
+pub mod model;
 pub mod page;
 
 use page::{CountryPage, LocationDetailPage, StatePage};
+pub use model::{Mailbox, Address};
 
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
-pub struct Address {
-    pub line1: String,
-    pub city: String,
-    pub state: String,
-    pub zip: String,
-}
-
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
-pub struct Mailbox {
-    pub id: String,
-    pub name: String,
-    pub address: Address,
-}
-
-pub struct AtmbClient {
+// 完美补齐 main.rs 里需要的原装统一接口
+pub struct ATMBCrawl {
     client: reqwest::Client,
 }
 
-impl AtmbClient {
+impl ATMBCrawl {
     pub fn new() -> Self {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
@@ -58,7 +45,7 @@ impl AtmbClient {
                     state_pages.push(sp);
                 }
             }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
         let total_num = state_pages.iter().map(|sp| sp.len()).sum::<usize>();
@@ -80,7 +67,7 @@ impl AtmbClient {
                     mailbox.address.line1 = detail_page.street();
                 }
             }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
         }
 
         info!("Spider finished. Captured {} total mailboxes.", mailboxes.len());
