@@ -7,12 +7,12 @@ pub mod page;
 use page::{CountryPage, LocationDetailPage, StatePage};
 pub use model::{Mailbox, Address};
 
-// 完美补齐 main.rs 里需要的原装统一接口
 pub struct ATMBCrawl {
     client: reqwest::Client,
 }
 
 impl ATMBCrawl {
+    // 完美纠正：去掉了可能导致 main 报错的 Result 包装，使其支持 ATMBCrawl::new() 直调
     pub fn new() -> Self {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
@@ -29,7 +29,8 @@ impl ATMBCrawl {
         Ok(text)
     }
 
-    pub async fn fetch_all_mailboxes(&self) -> Result<Vec<Mailbox>> {
+    // 完美纠正：函数名改为 main.rs 死死认定的 `fetch` 动作
+    pub async fn fetch(&self) -> Result<Vec<Mailbox>> {
         info!("Starting 2026 ATMB Mailbox spider...");
 
         let country_html = self.fetch_page("https://anytimemailbox.com".to_string()).await?;
@@ -61,7 +62,7 @@ impl ATMBCrawl {
         let total_mailboxes = mailboxes.len();
         for (idx, mailbox) in mailboxes.iter_mut().enumerate() {
             info!("[{}/{total_mailboxes}] fetching [{}] detail page...", idx + 1, mailbox.name);
-            let detail_url = format!("https://anytimemailbox.com/{}/{}", mailbox.address.state.to_lowercase(), mailbox.id);
+            let detail_url = format!("https://anytimemailbox.com/{}/{}", mailbox.address.state.to_lowercase(), mailbox.link);
             if let Ok(html) = self.fetch_page(detail_url).await {
                 if let Ok(detail_page) = LocationDetailPage::parse_html(&html) {
                     mailbox.address.line1 = detail_page.street();
