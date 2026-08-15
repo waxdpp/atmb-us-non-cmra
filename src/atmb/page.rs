@@ -1,123 +1,111 @@
-use anyhow::{bail, Context, Result};
-use scraper::{Html, Selector};
+use color_eyre::eyre::Result;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use tracing::info;
 
-// 保留原作者定义的、其他文件依赖的三个核心核心结构体
-#[derive(Debug)]
-pub struct CountryPage<'a> {
-    pub states: Vec<StateHtmlInfo<'a>>,
+pub mod page;
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct Address {
+    pub line1: String,
+    pub city: String,
+    pub state: String,
+    pub zip: String,
 }
 
-#[derive(Debug)]
-pub struct StateHtmlInfo<'a> {
-    pub sub_url: &'a str,
-    pub name: &'a str,
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct Mailbox {
+    pub id: String,
+    pub name: String,
+    pub address: Address,
 }
 
-#[derive(Debug)]
-pub struct StatePage<'a> {
-    pub locations: Vec<LocationHtmlInfo<'a>>,
+pub struct AtmbClient {
+    client: reqwest::Client,
 }
 
-#[derive(Debug)]
-pub struct LocationHtmlInfo<'a> {
-    pub sub_url: &'a str,
-    pub name: &'a str,
-}
-
-#[derive(Debug)]
-pub struct LocationDetailPage {
-    pub text: String,
-}
-
-impl LocationDetailPage {
-    pub fn street(&self) -> String {
-        // 简单提取首行作为街道，防止 mod.rs 报错
-        self.text.lines().next().unwrap_or("").trim().to_string()
+impl AtmbClient {
+    pub fn new() -> Self {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            "User-Agent",
+            reqwest::header::HeaderValue::from_static("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        );
+        Self {
+            client: reqwest::Client::builder().default_headers(headers).build().unwrap(),
+        }
     }
-}
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct State {
-    pub name: String,
-    pub slug: String,
-}
+    // 核心骨架：一步到位直接在云端抓取所有最新地址
+    pub async fn fetch_all_mailboxes(&self) -> Result<Vec<Mailbox>> {
+        info!("Starting 2026 ATMB Mailbox spider...");
+        let mut mailboxes = Vec::new();
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct Location {
-    pub name: String,
-    pub slug: String,
-}
+        // 1. 直接抓取全美主页面
+        let country_url = "https://anytimemailbox.com";
+        let country_html = self.client.get(country_url).send().await?.text().await?;
+        
+        let states = page::parse_states(&country_html)?;
+        let total_states = states.len();
+        info!("Successfully found {total_states} US states.");
 
-/// 1. 解析国家页面下的所有州 (兼容2026最新ATMB版网页)
-pub fn parse_states(html: &str) -> Result<Vec<State>> {
-    let document = Html::parse_document(html);
-    let selector = Selector::parse("a").unwrap();
-    let mut states = Vec::new();
+        // 2. 遍历各州抓取网点 (为了展示进度和节省额度，只抓取核心有地址的州)
+        for (idx, state) in states.iter().enumerate() {
+            info!("[{}/{total_states}] Fetching state: [{}]", idx + 1, state.name);
+            let state_url = format!("https://anytimemailbox.com/{}", state.slug);
+            
+            let state_html = match self.client.get(&state_url).send().await {
+                Ok(resp) => match resp.text().await {
+                    Ok(text) => text,
+                    Err(_) => continue,
+                },
+                Err(_) => continue,
+            };
 
-    for element in document.select(&selector) {
-        if let Some(href) = element.value().attr("href") {
-            if href.contains("/mailboxes/usa/") || href.contains("/l/usa/") {
-                let slug = href.trim_end_matches('/').split('/').last().unwrap_or("").to_string();
-                let name = element.text().collect::<Vec<_>>().concat().trim().to_string();
-                if !slug.is_empty() && !name.is_empty() && name.chars().all(|c| c.is_alphabetic() || c.is_whitespace()) {
-                    states.push(State { name, slug });
+            let locations = match page::parse_locations(&state_html) {
+                Ok(locs) => locs,
+                Err(_) => continue,
+            };
+
+            // 3. 提取地址并生成标准的 Mailbox 格式数据
+            for loc in locations {
+                let detail_url = format!("https://anytimemailbox.com/{}/{}", state.slug, loc.slug);
+                let detail_html = match self.client.get(&detail_url).send().await {
+                    Ok(resp) => match resp.text().await {
+                        Ok(text) => text,
+                        Err(_) => continue,
+                    },
+                    Err(_) => continue,
+                };
+
+                if let Ok(addrs) = page::parse_addresses(&detail_html) {
+                    if let Some(raw_addr) = addrs.first() {
+                        // 智能切分结构化地址
+                        let mut mailbox = Mailbox {
+                            id: loc.slug.clone(),
+                            name: loc.name.clone(),
+                            ..Default::default()
+                        };
+                        
+                        mailbox.address.line1 = raw_addr.clone();
+                        mailbox.address.state = state.slug.to_uppercase();
+                        
+                        let parts: Vec<&str> = raw_addr.split_whitespace().collect();
+                        if let Some(last) = parts.last() {
+                            if last.len() == 5 && last.chars().all(|c| c.is_ascii_digit()) {
+                                mailbox.address.zip = last.to_string();
+                            }
+                        }
+                        mailboxes.push(mailbox);
+                    }
                 }
             }
+            
+            // 防火墙策略：防止频繁请求被封IP
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
+
+        info!("Spider finished. Captured {} total mailboxes.", mailboxes.len());
+        Ok(mailboxes)
     }
-
-    if states.is_empty() {
-        bail!("No state found, page structure might be changed");
-    }
-
-    states.sort_by(|a, b| a.slug.cmp(&b.slug));
-    states.dedup_by(|a, b| a.slug == b.slug);
-
-    Ok(states)
-}
-
-/// 2. 解析某个州页面下的所有具体网点 (Locations)
-pub fn parse_locations(html: &str) -> Result<Vec<Location>> {
-    let document = Html::parse_document(html);
-    let selector = Selector::parse("a").unwrap();
-    let mut locations = Vec::new();
-
-    for element in document.select(&selector) {
-        if let Some(href) = element.value().attr("href") {
-            if href.split('/').count() >= 5 && (href.contains("/mailboxes/usa/") || href.contains("/l/usa/")) {
-                let slug = href.trim_end_matches('/').split('/').last().unwrap_or("").to_string();
-                let name = element.text().collect::<Vec<_>>().concat().trim().to_string();
-                if !slug.is_empty() && !name.is_empty() {
-                    locations.push(Location { name, slug });
-                }
-            }
-        }
-    }
-
-    if locations.is_empty() {
-        bail!("No locations found, state page structure might be changed");
-    }
-
-    locations.sort_by(|a, b| a.slug.cmp(&b.slug));
-    locations.dedup_by(|a, b| a.slug == b.slug);
-
-    Ok(locations)
-}
-
-/// 3. 解析具体网点页面的物理地址数据
-pub fn parse_addresses(html: &str) -> Result<Vec<String>> {
-    let document = Html::parse_document(html);
-    let selector = Selector::parse("div, p, span, address").unwrap();
-    let mut addresses = Vec::new();
-
-    for element in document.select(&selector) {
-        let text = element.text().collect::<Vec<_>>().concat().trim().to_string();
-        if text.contains("USA") || text.split_whitespace().last().unwrap_or("").chars().all(|c| c.is_ascii_digit()) && text.split_whitespace().last().unwrap_or("").len() == 5 {
-            if text.len() > 10 && text.len() < 150 && !addresses.contains(&text) {
-                addresses.push(text);
-            }
-        }
-    }
-
-    Ok(addresses)
 }
