@@ -1,21 +1,20 @@
 use color_eyre::eyre::{Context, OptionExt, Result};
 use scraper::{Html, Selector};
 
-/// ATMB country page. i.e. https://anytimemailbox.com
 #[derive(Debug)]
-pub struct CountryPage<'a> {
-    pub states: Vec<StateHtmlInfo<'a>>,
+pub struct CountryPage {
+    pub states: Vec<StateHtmlInfo>,
 }
 
-#[derive(Debug)]
-pub struct StateHtmlInfo<'a> {
-    sub_url: &'a str,
-    name: &'a str,
+#[derive(Debug, Clone)]
+pub struct StateHtmlInfo {
+    pub sub_url: String,
+    pub name: String,
 }
 
-impl<'a> StateHtmlInfo<'a> {
+impl StateHtmlInfo {
     pub fn name(&self) -> &str {
-        self.name
+        &self.name
     }
 
     pub fn url(&self) -> String {
@@ -23,8 +22,8 @@ impl<'a> StateHtmlInfo<'a> {
     }
 }
 
-impl<'a> CountryPage<'a> {
-    pub fn parse_html(html: &'a str) -> Result<Self> {
+impl CountryPage {
+    pub fn parse_html(html: &str) -> Result<Self> {
         let document = Html::parse_document(html);
         let selector = Selector::parse("a").unwrap();
         let mut states = Vec::new();
@@ -36,8 +35,8 @@ impl<'a> CountryPage<'a> {
                     let name_trimmed = name.trim();
                     if !name_trimmed.is_empty() && name_trimmed.chars().all(|c| c.is_alphabetic() || c.is_whitespace()) {
                         states.push(StateHtmlInfo {
-                            sub_url: href,
-                            name: element.text().next().unwrap_or("").trim(),
+                            sub_url: href.to_string(),
+                            name: name_trimmed.to_string(),
                         });
                     }
                 }
@@ -48,20 +47,19 @@ impl<'a> CountryPage<'a> {
             color_eyre::eyre::bail!("No state found, page structure might be changed");
         }
 
-        states.sort_by(|a, b| a.sub_url.cmp(b.sub_url));
+        states.sort_by(|a, b| a.sub_url.cmp(&b.sub_url));
         states.dedup_by(|a, b| a.sub_url == b.sub_url);
 
         Ok(Self { states })
     }
 }
 
-/// ATMB state page. i.e. https://anytimemailbox.com/california
 #[derive(Debug)]
-pub struct StatePage<'a> {
-    pub locations: Vec<LocationHtmlInfo<'a>>,
+pub struct StatePage {
+    pub locations: Vec<LocationHtmlInfo>,
 }
 
-impl<'a> StatePage<'a> {
+impl StatePage {
     pub fn len(&self) -> usize {
         self.locations.len()
     }
@@ -70,10 +68,10 @@ impl<'a> StatePage<'a> {
         self.locations.is_empty()
     }
 
-    pub fn to_mailboxes(&self) -> Option<Vec<crate::atmb::Mailbox>> {
+    pub fn to_mailboxes(&self) -> Option<Vec<crate::atmb::model::Mailbox>> {
         let mut mailboxes = Vec::new();
         for loc in &self.locations {
-            mailboxes.push(crate::atmb::Mailbox {
+            mailboxes.push(crate::atmb::model::Mailbox {
                 name: loc.name.to_string(),
                 id: loc.slug().to_string(),
                 ..Default::default()
@@ -86,7 +84,7 @@ impl<'a> StatePage<'a> {
         }
     }
 
-    pub fn parse_html(html: &'a str) -> Result<Self> {
+    pub fn parse_html(html: &str) -> Result<Self> {
         let document = Html::parse_document(html);
         let selector = Selector::parse("a").unwrap();
         let mut locations = Vec::new();
@@ -98,8 +96,8 @@ impl<'a> StatePage<'a> {
                     let name_trimmed = name.trim();
                     if !name_trimmed.is_empty() && !href.ends_with("/usa") && !href.ends_with("/usa/") {
                         locations.push(LocationHtmlInfo {
-                            sub_url: href,
-                            name: element.text().next().unwrap_or("").trim(),
+                            sub_url: href.to_string(),
+                            name: name_trimmed.to_string(),
                         });
                     }
                 }
@@ -110,29 +108,28 @@ impl<'a> StatePage<'a> {
             color_eyre::eyre::bail!("No locations found, state page structure might be changed");
         }
 
-        locations.sort_by(|a, b| a.sub_url.cmp(b.sub_url));
+        locations.sort_by(|a, b| a.sub_url.cmp(&b.sub_url));
         locations.dedup_by(|a, b| a.sub_url == b.sub_url);
 
         Ok(Self { locations })
     }
 }
 
-#[derive(Debug)]
-pub struct LocationHtmlInfo<'a> {
-    sub_url: &'a str,
-    name: &'a str,
+#[derive(Debug, Clone)]
+pub struct LocationHtmlInfo {
+    pub sub_url: String,
+    pub name: String,
 }
 
-impl<'a> LocationHtmlInfo<'a> {
+impl LocationHtmlInfo {
     pub fn slug(&self) -> &str {
         self.sub_url.trim_end_matches('/').split('/').last().unwrap_or("")
     }
 }
 
-/// ATMB location detail page.
 #[derive(Debug)]
 pub struct LocationDetailPage {
-    text: String,
+    pub text: String,
 }
 
 impl LocationDetailPage {
