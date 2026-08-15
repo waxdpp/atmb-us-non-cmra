@@ -18,7 +18,7 @@ impl StateHtmlInfo {
     }
 
     pub fn url(&self) -> String {
-        format!("https://anytimemailbox.com{}", self.sub_url)
+        format!("https://www.anytimemailbox.com{}", self.sub_url)
     }
 }
 
@@ -73,7 +73,7 @@ impl StatePage {
         for loc in &self.locations {
             mailboxes.push(crate::atmb::model::Mailbox {
                 name: loc.name.to_string(),
-                id: loc.slug().to_string(),
+                link: loc.slug().to_string(), // 完美纠正：这里是原装的 link 字段
                 ..Default::default()
             });
         }
